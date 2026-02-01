@@ -54,7 +54,7 @@ EOF
 # heartbeat_timeout = 90
 
 # Connection pooling
-pool_count = 10
+# pool_count = 10y
 
 # Reconnection settings (optimized for 200ms+ latency)
 # login_fail_exit = false
@@ -62,8 +62,8 @@ pool_count = 10
 # dial_server_keepalive = 7200
 
 # Protocol optimization
-protocol = tcp
-tls_enable = true
+# protocol = tcp
+# tls_enable = true
 
 # Logging
 log_file = ${FRP_INSTALL_DIR}/frpc.log
@@ -77,7 +77,7 @@ local_ip = 127.0.0.1
 local_port = ${local_http}
 custom_domains = ${domain}
 # Enable compression for better bandwidth usage
-use_compression = true
+# use_compression = true
 
 # HTTPS proxy
 [web_https]
@@ -86,7 +86,7 @@ local_ip = 127.0.0.1
 local_port = ${local_https}
 custom_domains = ${domain}
 # Enable compression
-use_compression = true
+# use_compression = true
 EOF
     
     print_success "Configuration file created: ${FRP_INSTALL_DIR}/frpc.ini"

@@ -85,7 +85,7 @@ vhost_https_port = ${https_port}
 # heartbeat_timeout = 90
 
 # Connection pooling for better performance
-max_pool_count = 10
+# max_pool_count = 10
 
 # Logging
 log_file = ${FRP_INSTALL_DIR}/frps.log
