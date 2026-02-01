@@ -54,7 +54,7 @@ EOF
 # heartbeat_timeout = 90
 
 # Connection pooling
-# pool_count = 10y
+# pool_count = 10
 
 # Reconnection settings (optimized for 200ms+ latency)
 # login_fail_exit = false
