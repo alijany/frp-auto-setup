@@ -89,7 +89,7 @@ max_pool_count = 10
 
 # Logging
 log_file = ${FRP_INSTALL_DIR}/frps.log
-log_level = info
+log_level = error
 log_max_days = 3
 EOF
 

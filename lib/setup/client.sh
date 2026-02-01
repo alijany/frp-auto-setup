@@ -67,7 +67,7 @@ tls_enable = true
 
 # Logging
 log_file = ${FRP_INSTALL_DIR}/frpc.log
-log_level = info
+log_level = error
 log_max_days = 3
 
 # HTTP proxy
