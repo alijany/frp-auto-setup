@@ -2,6 +2,10 @@
 
 Automated installation and configuration script for [FRP (Fast Reverse Proxy)](https://github.com/fatedier/frp) with interactive menu and remote SSH management.
 
+> **🎉 Refactored**: This project has been refactored into a modular structure! See [REFACTORING.md](REFACTORING.md) for details.
+> - **New**: Use `./frp-setup-new.sh` for the modular version
+> - **Legacy**: `./frp-setup.sh` is the original script (still functional)
+
 ## Features
 
 - **Interactive Menu** - Easy-to-use interface for all operations
@@ -10,16 +14,20 @@ Automated installation and configuration script for [FRP (Fast Reverse Proxy)](h
 - **Configuration Management** - Save/load connection settings
 - **Log Viewing & Testing** - Monitor and test FRP services
 - **Auto-detection** - Automatically detects system architecture
+- **Modular Architecture** - Clean, maintainable code structure (new version)
 
 ## Quick Start
 
 ```bash
-# Run interactive mode
-sudo ./frp-setup.sh
+# Run interactive mode (new modular version)
+sudo ./frp-setup-new.sh
 
 # Or use command-line mode
+sudo ./frp-setup-new.sh server -w YourPassword123
+sudo ./frp-setup-new.sh client -a SERVER_IP -m yourdomain.com
+
+# Legacy script still works
 sudo ./frp-setup.sh server -w YourPassword123
-sudo ./frp-setup.sh client -a SERVER_IP -m yourdomain.com
 ```
 
 ## Interactive Menu
