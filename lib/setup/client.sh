@@ -47,8 +47,19 @@ EOF
 
     cat >> "${FRP_INSTALL_DIR}/frpc.ini" << EOF
 
+# Network optimization for unstable connections and high latency
+# tcp_mux = true
+# tcp_mux_keepalive_interval = 60
+# heartbeat_interval = 10
+# heartbeat_timeout = 90
+
 # Connection pooling
 pool_count = 10
+
+# Reconnection settings (optimized for 200ms+ latency)
+# login_fail_exit = false
+# dial_server_timeout = 30
+# dial_server_keepalive = 7200
 
 # Protocol optimization
 protocol = tcp
@@ -126,7 +137,7 @@ EOF
         print_info "Heartbeat Interval: 10s"
         print_info "Heartbeat Timeout: 90s (optimized for high latency)"
         print_info "Dial Server Timeout: 30s"
-        print_info "Connection Pool: 5"
+        print_info "Connection Pool: 10"
         echo ""
         print_info "Log File: ${FRP_INSTALL_DIR}/frpc.log"
         print_info "Check status: systemctl status frpc"

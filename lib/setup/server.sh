@@ -78,6 +78,12 @@ dashboard_pwd = ${dashboard_pwd}
 vhost_http_port = ${http_port}
 vhost_https_port = ${https_port}
 
+# Network optimization for unstable connections and high latency
+# tcp_mux = true
+# tcp_mux_keepalive_interval = 60
+# heartbeat_interval = 10
+# heartbeat_timeout = 90
+
 # Connection pooling for better performance
 max_pool_count = 10
 
