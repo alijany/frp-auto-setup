@@ -83,8 +83,8 @@ prompt_password() {
     local password
     
     read -sp "${prompt}: " password
-    echo
-    echo "$password"
+    echo >&2
+    echo -n "$password"
 }
 
 prompt_confirm() {
@@ -132,6 +132,17 @@ load_config() {
     else
         return 1
     fi
+}
+
+generate_random_string() {
+    local length="${1:-16}"
+    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length"
+}
+
+generate_random_port() {
+    local min="${1:-7000}"
+    local max="${2:-8000}"
+    echo $((min + RANDOM % (max - min)))
 }
 
 show_saved_config() {
@@ -201,13 +212,17 @@ show_main_menu() {
     echo -e "${BLUE}4)${NC} Update FRP Client Configuration"
     echo -e "${BLUE}5)${NC} Stop FRP Server"
     echo -e "${BLUE}6)${NC} Stop FRP Client"
-    echo -e "${BLUE}7)${NC} Remove FRP Server"
-    echo -e "${BLUE}8)${NC} Remove FRP Client"
-    echo -e "${BLUE}9)${NC} View FRP Logs"
-    echo -e "${BLUE}10)${NC} Test FRP Connection"
-    echo -e "${BLUE}11)${NC} Save Configuration"
-    echo -e "${BLUE}12)${NC} View Saved Configuration"
-    echo -e "${BLUE}13)${NC} Exit"
+    echo -e "${BLUE}7)${NC} Restart FRP Server"
+    echo -e "${BLUE}8)${NC} Restart FRP Client"
+    echo -e "${BLUE}9)${NC} Remove FRP Server"
+    echo -e "${BLUE}10)${NC} Remove FRP Client"
+    echo -e "${BLUE}11)${NC} View FRP Logs"
+    echo -e "${BLUE}12)${NC} Test FRP Connection"
+    echo -e "${BLUE}13)${NC} Show FRP Config"
+    echo -e "${BLUE}14)${NC} Auto Setup (Server + Client)"
+    echo -e "${BLUE}15)${NC} Save Configuration"
+    echo -e "${BLUE}16)${NC} View Saved Configuration"
+    echo -e "${BLUE}17)${NC} Exit"
     echo
 }
 
@@ -608,7 +623,7 @@ interactive_mode() {
     
     while true; do
         show_main_menu "$server_location" "$client_location"
-        local choice=$(prompt_input "Select an option" "13")
+        local choice=$(prompt_input "Select an option" "17")
         echo
         
         case "$choice" in
@@ -658,12 +673,26 @@ interactive_mode() {
                 if [ "$server_location" = "3" ]; then
                     print_error "Server management is disabled"
                 else
+                    restart_server "$SERVER_IP" "$SERVER_USER"
+                fi
+                ;;
+            8)
+                if [ "$client_location" = "3" ]; then
+                    print_error "Client management is disabled"
+                else
+                    restart_client "$CLIENT_IP" "$CLIENT_USER"
+                fi
+                ;;
+            9)
+                if [ "$server_location" = "3" ]; then
+                    print_error "Server management is disabled"
+                else
                     if prompt_confirm "Are you sure you want to remove FRP Server?"; then
                         remove_server "$SERVER_IP" "$SERVER_USER"
                     fi
                 fi
                 ;;
-            8)
+            10)
                 if [ "$client_location" = "3" ]; then
                     print_error "Client management is disabled"
                 else
@@ -672,7 +701,7 @@ interactive_mode() {
                     fi
                 fi
                 ;;
-            9)
+            11)
                 echo -e "${YELLOW}View logs for:${NC}"
                 echo "1) FRP Server"
                 echo "2) FRP Client"
@@ -697,7 +726,7 @@ interactive_mode() {
                     print_error "Invalid choice"
                 fi
                 ;;
-            10)
+            12)
                 echo -e "${YELLOW}Test connection for:${NC}"
                 echo "1) FRP Server"
                 echo "2) FRP Client"
@@ -720,13 +749,39 @@ interactive_mode() {
                     print_error "Invalid choice"
                 fi
                 ;;
-            11)
+            13)
+                echo -e "${YELLOW}Show config for:${NC}"
+                echo "1) FRP Server"
+                echo "2) FRP Client"
+                local config_choice=$(prompt_input "Select service" "1")
+                echo
+                
+                if [ "$config_choice" = "1" ]; then
+                    if [ "$server_location" = "3" ]; then
+                        print_error "Server management is disabled"
+                    else
+                        show_frp_config "server" "$SERVER_IP" "$SERVER_USER"
+                    fi
+                elif [ "$config_choice" = "2" ]; then
+                    if [ "$client_location" = "3" ]; then
+                        print_error "Client management is disabled"
+                    else
+                        show_frp_config "client" "$CLIENT_IP" "$CLIENT_USER"
+                    fi
+                else
+                    print_error "Invalid choice"
+                fi
+                ;;
+            14)
+                auto_setup "$SERVER_IP" "$SERVER_USER" "$CLIENT_IP" "$CLIENT_USER"
+                ;;
+            15)
                 save_config "$server_location" "$client_location" "$SERVER_IP" "$SERVER_USER" "$CLIENT_IP" "$CLIENT_USER"
                 ;;
-            12)
+            16)
                 show_saved_config
                 ;;
-            13)
+            17)
                 print_success "Goodbye!"
                 exit 0
                 ;;
@@ -755,6 +810,10 @@ ${YELLOW}COMMANDS:${NC}
   update-client    Update existing FRP client configuration
   stop-server      Stop FRP server service
   stop-client      Stop FRP client service
+  restart-server   Restart FRP server service
+  restart-client   Restart FRP client service
+  show-config      Show FRP configuration (server or client)
+  auto-setup       Automatically setup both server and client with random secure values
   remove-server    Remove FRP server completely
   remove-client    Remove FRP client completely
 
@@ -889,50 +948,344 @@ test_connection() {
     local remote_user="${3:-root}"
     
     local service_name
+    local config_file
+    
     if [ "$service_type" = "server" ]; then
         service_name="frps"
+        config_file="${FRP_INSTALL_DIR}/frps.ini"
     else
         service_name="frpc"
+        config_file="${FRP_INSTALL_DIR}/frpc.ini"
     fi
     
-    print_header "Testing FRP ${service_type^} Connection"
+    print_header "Testing FRP ${service_type^} Connection - Real Data Test"
     echo
     
     if [ -n "$remote_ip" ]; then
-        print_info "Checking remote service status on ${remote_user}@${remote_ip}..."
+        print_info "Testing remote service on ${remote_user}@${remote_ip}..."
+        echo
         
-        if ssh "${remote_user}@${remote_ip}" "sudo systemctl is-active --quiet ${service_name}"; then
-            print_success "${service_name} service is running"
-            echo
-            print_info "Service details:"
-            ssh "${remote_user}@${remote_ip}" "sudo systemctl status ${service_name} --no-pager -l" | head -15
-            echo
-            print_info "Recent logs:"
-            ssh "${remote_user}@${remote_ip}" "sudo journalctl -u ${service_name} -n 10 --no-pager"
-        else
+        # Check if service is running
+        if ! ssh "${remote_user}@${remote_ip}" "sudo systemctl is-active --quiet ${service_name}"; then
             print_error "${service_name} service is not running"
             echo
             print_info "Last 20 log lines:"
             ssh "${remote_user}@${remote_ip}" "sudo journalctl -u ${service_name} -n 20 --no-pager"
+            return 1
         fi
-    else
-        print_info "Checking local service status..."
         
-        if systemctl is-active --quiet ${service_name} 2>/dev/null; then
-            print_success "${service_name} service is running"
+        print_success "✓ Service is running"
+        
+        if [ "$service_type" = "server" ]; then
+            # Test server bind port and dashboard
+            local bind_port=$(ssh "${remote_user}@${remote_ip}" "grep -E '^bind_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' '")
+            local dash_port=$(ssh "${remote_user}@${remote_ip}" "grep -E '^dashboard_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' '")
+            
             echo
-            print_info "Service details:"
-            systemctl status ${service_name} --no-pager -l | head -15
-            echo
-            print_info "Recent logs:"
-            journalctl -u ${service_name} -n 10 --no-pager
+            print_info "Testing bind port connectivity..."
+            if ssh "${remote_user}@${remote_ip}" "timeout 3 bash -c 'echo test_data > /dev/tcp/127.0.0.1/${bind_port}' 2>/dev/null"; then
+                print_success "✓ Bind port ${bind_port} is accessible"
+            else
+                print_error "✗ Bind port ${bind_port} test failed"
+            fi
+            
+            if [ -n "$dash_port" ]; then
+                echo
+                print_info "Testing dashboard HTTP connection..."
+                if ssh "${remote_user}@${remote_ip}" "curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:${dash_port} | grep -qE '(200|401|302)'"; then
+                    print_success "✓ Dashboard is responding on port ${dash_port}"
+                else
+                    print_error "✗ Dashboard connection test failed on port ${dash_port}"
+                fi
+            fi
         else
+            # Test client connection to server
+            local server_addr=$(ssh "${remote_user}@${remote_ip}" "grep -E '^server_addr' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' '")
+            local server_port=$(ssh "${remote_user}@${remote_ip}" "grep -E '^server_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' '")
+            
+            echo
+            print_info "Testing connection to FRP server ${server_addr}:${server_port}..."
+            if ssh "${remote_user}@${remote_ip}" "timeout 5 bash -c 'echo -n \"PING\" > /dev/tcp/${server_addr}/${server_port}' 2>/dev/null"; then
+                print_success "✓ Can reach FRP server ${server_addr}:${server_port}"
+            else
+                print_error "✗ Cannot reach FRP server ${server_addr}:${server_port}"
+            fi
+            
+            # Check client logs for successful connection
+            echo
+            print_info "Checking client connection status in logs..."
+            if ssh "${remote_user}@${remote_ip}" "sudo journalctl -u ${service_name} -n 50 --no-pager | grep -iE '(login to server success|start proxy success)'" | head -5; then
+                print_success "✓ Client has successfully connected to server"
+            else
+                print_error "✗ No successful connection messages found in logs"
+            fi
+        fi
+        
+        echo
+        print_info "Recent service logs:"
+        ssh "${remote_user}@${remote_ip}" "sudo journalctl -u ${service_name} -n 10 --no-pager"
+        
+    else
+        print_info "Testing local service..."
+        echo
+        
+        # Check if service is running
+        if ! systemctl is-active --quiet ${service_name} 2>/dev/null; then
             print_error "${service_name} service is not running or not installed"
             if systemctl list-unit-files | grep -q "${service_name}.service"; then
                 echo
                 print_info "Last 20 log lines:"
                 journalctl -u ${service_name} -n 20 --no-pager
             fi
+            return 1
+        fi
+        
+        print_success "✓ Service is running"
+        
+        if [ "$service_type" = "server" ]; then
+            # Test server bind port and dashboard
+            local bind_port=$(grep -E '^bind_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+            local dash_port=$(grep -E '^dashboard_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+            
+            echo
+            print_info "Testing bind port connectivity..."
+            if timeout 3 bash -c "echo test_data > /dev/tcp/127.0.0.1/${bind_port}" 2>/dev/null; then
+                print_success "✓ Bind port ${bind_port} is accessible"
+            else
+                print_error "✗ Bind port ${bind_port} test failed"
+            fi
+            
+            if [ -n "$dash_port" ]; then
+                echo
+                print_info "Testing dashboard HTTP connection..."
+                local http_code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:${dash_port} 2>/dev/null)
+                if echo "$http_code" | grep -qE '(200|401|302)'; then
+                    print_success "✓ Dashboard is responding on port ${dash_port} (HTTP ${http_code})"
+                else
+                    print_error "✗ Dashboard connection test failed on port ${dash_port}"
+                fi
+            fi
+            
+            # Check for active client connections
+            echo
+            print_info "Checking for connected clients..."
+            local client_count=$(journalctl -u ${service_name} -n 100 --no-pager 2>/dev/null | grep -c "client login success" || echo "0")
+            if [ "$client_count" -gt 0 ]; then
+                print_success "✓ Detected ${client_count} client connection(s) in recent logs"
+            else
+                print_info "ℹ No client connections detected in recent logs"
+            fi
+            
+        else
+            # Test client connection to server
+            local server_addr=$(grep -E '^server_addr' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+            local server_port=$(grep -E '^server_port' ${config_file} 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+            
+            echo
+            print_info "Testing connection to FRP server ${server_addr}:${server_port}..."
+            if timeout 5 bash -c "echo -n 'PING' > /dev/tcp/${server_addr}/${server_port}" 2>/dev/null; then
+                print_success "✓ Can reach FRP server ${server_addr}:${server_port}"
+            else
+                print_error "✗ Cannot reach FRP server ${server_addr}:${server_port}"
+            fi
+            
+            # Check client logs for successful connection
+            echo
+            print_info "Checking client connection status in logs..."
+            if journalctl -u ${service_name} -n 50 --no-pager 2>/dev/null | grep -iE '(login to server success|start proxy success)' | head -5; then
+                print_success "✓ Client has successfully connected to server"
+            else
+                print_error "✗ No successful connection messages found in logs"
+            fi
+            
+            # Test local proxied services
+            echo
+            print_info "Testing local proxied services..."
+            local local_http=$(grep -A 5 '\[web_http\]' ${config_file} 2>/dev/null | grep 'local_port' | cut -d'=' -f2 | tr -d ' ')
+            if [ -n "$local_http" ]; then
+                if timeout 3 bash -c "echo -e 'GET / HTTP/1.0\r\n\r\n' > /dev/tcp/127.0.0.1/${local_http}" 2>/dev/null; then
+                    print_success "✓ Local HTTP service on port ${local_http} is accessible"
+                else
+                    print_info "ℹ Local HTTP service on port ${local_http} may not be running"
+                fi
+            fi
+        fi
+        
+        echo
+        print_info "Recent service logs:"
+        journalctl -u ${service_name} -n 10 --no-pager
+    fi
+}
+
+auto_setup() {
+    local server_ip="$1"
+    local server_user="${2:-root}"
+    local client_ip="$3"
+    local client_user="${4:-root}"
+    
+    print_header "Auto Setup - Server + Client"
+    echo
+    print_info "This will automatically configure both FRP server and client"
+    print_info "with randomly generated secure credentials."
+    echo
+    
+    # Get domain for client
+    local domain=$(prompt_input "Enter your custom domain (e.g., example.com)")
+    if [ -z "$domain" ]; then
+        print_error "Domain is required"
+        return 1
+    fi
+    
+    # Determine server address
+    local server_addr
+    if [ -n "$server_ip" ]; then
+        server_addr="$server_ip"
+        print_info "Server will be set up on: ${server_user}@${server_ip}"
+    else
+        print_info "Server will be set up locally"
+        # Get local IP or use localhost
+        server_addr=$(hostname -I | awk '{print $1}' || echo "127.0.0.1")
+    fi
+    
+    if [ -n "$client_ip" ]; then
+        print_info "Client will be set up on: ${client_user}@${client_ip}"
+    else
+        print_info "Client will be set up locally"
+    fi
+    
+    echo
+    if ! prompt_confirm "Continue with auto setup?"; then
+        print_info "Auto setup cancelled"
+        return 0
+    fi
+    
+    # Generate random values
+    print_header "Generating Secure Random Values"
+    local bind_port=$(generate_random_port 7000 7999)
+    local dashboard_port=$(generate_random_port 7500 8499)
+    local dashboard_pwd=$(generate_random_string 20)
+    local auth_token=$(generate_random_string 32)
+    local dashboard_user="admin"
+    
+    print_success "Bind Port: ${bind_port}"
+    print_success "Dashboard Port: ${dashboard_port}"
+    print_success "Dashboard User: ${dashboard_user}"
+    print_success "Dashboard Password: ${dashboard_pwd}"
+    print_success "Auth Token: ${auth_token}"
+    echo
+    
+    # Setup server
+    print_header "Step 1: Setting up FRP Server"
+    if ! setup_server "$bind_port" "80" "443" "$dashboard_port" "$dashboard_user" "$dashboard_pwd" "$auth_token" "$server_ip" "$server_user"; then
+        print_error "Server setup failed!"
+        return 1
+    fi
+    
+    echo
+    sleep 2
+    
+    # Setup client
+    print_header "Step 2: Setting up FRP Client"
+    if [ -n "$client_ip" ]; then
+        if ! setup_client_remote "$client_ip" "$server_addr" "$bind_port" "$domain" "80" "443" "$auth_token" "$client_user"; then
+            print_error "Client setup failed!"
+            return 1
+        fi
+    else
+        if ! setup_client "$server_addr" "$bind_port" "$domain" "80" "443" "$auth_token"; then
+            print_error "Client setup failed!"
+            return 1
+        fi
+    fi
+    
+    # Display summary
+    echo
+    print_header "Auto Setup Complete!"
+    echo
+    print_success "Server Configuration:"
+    echo "  Server Address: ${server_addr}"
+    echo "  Bind Port: ${bind_port}"
+    echo "  Dashboard: http://${server_addr}:${dashboard_port}"
+    echo "  Dashboard User: ${dashboard_user}"
+    echo "  Dashboard Password: ${dashboard_pwd}"
+    echo
+    print_success "Client Configuration:"
+    echo "  Server: ${server_addr}:${bind_port}"
+    echo "  Domain: ${domain}"
+    echo "  Auth Token: ${auth_token}"
+    echo
+    print_info "IMPORTANT: Save these credentials in a secure location!"
+    echo
+    
+    # Optionally save to file
+    if prompt_confirm "Save credentials to a file?"; then
+        local cred_file="${HOME}/frp-auto-setup-credentials-$(date +%Y%m%d-%H%M%S).txt"
+        cat > "$cred_file" << EOF
+FRP Auto Setup Credentials
+Generated: $(date)
+
+=== Server Configuration ===
+Server Address: ${server_addr}
+Bind Port: ${bind_port}
+Dashboard URL: http://${server_addr}:${dashboard_port}
+Dashboard User: ${dashboard_user}
+Dashboard Password: ${dashboard_pwd}
+
+=== Client Configuration ===
+Server: ${server_addr}:${bind_port}
+Domain: ${domain}
+Auth Token: ${auth_token}
+
+=== Service Commands ===
+Restart Server: systemctl restart frps
+Restart Client: systemctl restart frpc
+View Server Logs: journalctl -u frps -f
+View Client Logs: journalctl -u frpc -f
+EOF
+        chmod 600 "$cred_file"
+        print_success "Credentials saved to: ${cred_file}"
+    fi
+}
+
+show_frp_config() {
+    local service_type="$1"  # "server" or "client"
+    local remote_ip="$2"
+    local remote_user="${3:-root}"
+    
+    local service_name
+    local config_file
+    
+    if [ "$service_type" = "server" ]; then
+        service_name="frps"
+        config_file="${FRP_INSTALL_DIR}/frps.ini"
+    else
+        service_name="frpc"
+        config_file="${FRP_INSTALL_DIR}/frpc.ini"
+    fi
+    
+    print_header "FRP ${service_type^} Configuration"
+    echo
+    
+    if [ -n "$remote_ip" ]; then
+        print_info "Configuration on Remote Host: ${remote_user}@${remote_ip}"
+        print_info "Config file: ${config_file}"
+        echo
+        
+        if ssh "${remote_user}@${remote_ip}" "test -f ${config_file}"; then
+            ssh "${remote_user}@${remote_ip}" "cat ${config_file}"
+        else
+            print_error "Configuration file not found on remote host"
+            print_info "FRP ${service_type^} may not be installed"
+        fi
+    else
+        print_info "Config file: ${config_file}"
+        echo
+        
+        if [ -f "$config_file" ]; then
+            cat "$config_file"
+        else
+            print_error "Configuration file not found"
+            print_info "FRP ${service_type^} may not be installed"
         fi
     fi
 }
@@ -973,6 +1326,54 @@ stop_client() {
             print_success "FRP Client stopped"
         else
             print_info "FRP Client is not running"
+        fi
+    fi
+}
+
+restart_server() {
+    local remote_ip="$1"
+    local remote_user="${2:-root}"
+    
+    if [ -n "$remote_ip" ]; then
+        print_header "Restarting FRP Server on Remote Host: ${remote_user}@${remote_ip}"
+        ssh "${remote_user}@${remote_ip}" "sudo systemctl restart frps"
+        print_success "FRP Server restarted on ${remote_ip}"
+    else
+        print_header "Restarting FRP Server"
+        
+        if systemctl is-active --quiet frps 2>/dev/null; then
+            systemctl restart frps
+            print_success "FRP Server restarted"
+        elif systemctl is-enabled --quiet frps 2>/dev/null; then
+            systemctl start frps
+            print_success "FRP Server started"
+        else
+            print_error "FRP Server is not installed or enabled"
+            return 1
+        fi
+    fi
+}
+
+restart_client() {
+    local remote_ip="$1"
+    local remote_user="${2:-root}"
+    
+    if [ -n "$remote_ip" ]; then
+        print_header "Restarting FRP Client on Remote Host: ${remote_user}@${remote_ip}"
+        ssh "${remote_user}@${remote_ip}" "sudo systemctl restart frpc"
+        print_success "FRP Client restarted on ${remote_ip}"
+    else
+        print_header "Restarting FRP Client"
+        
+        if systemctl is-active --quiet frpc 2>/dev/null; then
+            systemctl restart frpc
+            print_success "FRP Client restarted"
+        elif systemctl is-enabled --quiet frpc 2>/dev/null; then
+            systemctl start frpc
+            print_success "FRP Client started"
+        else
+            print_error "FRP Client is not installed or enabled"
+            return 1
         fi
     fi
 }
@@ -1160,6 +1561,9 @@ setup_server() {
     
     install_frp
     
+    # Strip any trailing newlines from password
+    dashboard_pwd=$(echo -n "$dashboard_pwd" | tr -d '\n\r')
+    
     # Create frps.ini
     cat > "${FRP_INSTALL_DIR}/frps.ini" << EOF
 [common]
@@ -1215,6 +1619,10 @@ ExecStart=${FRP_INSTALL_DIR}/frps -c ${FRP_INSTALL_DIR}/frps.ini
 ExecReload=/bin/kill -HUP \$MAINPID
 LimitNOFILE=1048576
 
+# Logging - output to both journal and log file
+StandardOutput=journal
+StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1237,8 +1645,13 @@ EOF
         print_info "Dashboard User: ${dashboard_user}"
         print_info "Dashboard Password: ${dashboard_pwd}"
         [ -n "$auth_token" ] && print_info "Auth Token: ${auth_token}"
-        print_info "Log File: ${FRP_INSTALL_DIR}/frps.log"
         echo ""
+        print_header "Network Settings"
+        print_info "TCP Mux Keepalive: 30s"
+        print_info "Heartbeat Interval: 10s"
+        print_info "Heartbeat Timeout: 45s"
+        echo ""
+        print_info "Log File: ${FRP_INSTALL_DIR}/frps.log"
         print_info "Check status: systemctl status frps"
         print_info "View logs: journalctl -u frps -f"
     else
@@ -1348,6 +1761,10 @@ ExecStart=${FRP_INSTALL_DIR}/frpc -c ${FRP_INSTALL_DIR}/frpc.ini
 ExecReload=/bin/kill -HUP \$MAINPID
 LimitNOFILE=1048576
 
+# Logging - output to both journal and log file
+StandardOutput=journal
+StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1368,8 +1785,14 @@ EOF
         print_info "Local HTTP: ${local_http}"
         print_info "Local HTTPS: ${local_https}"
         [ -n "$auth_token" ] && print_info "Auth Token: Configured"
-        print_info "Log File: ${FRP_INSTALL_DIR}/frpc.log"
         echo ""
+        print_header "Network Settings"
+        print_info "TCP Mux Keepalive: 30s"
+        print_info "Heartbeat Interval: 10s"
+        print_info "Heartbeat Timeout: 45s"
+        print_info "Connection Pool: 5"
+        echo ""
+        print_info "Log File: ${FRP_INSTALL_DIR}/frpc.log"
         print_info "Check status: systemctl status frpc"
         print_info "View logs: journalctl -u frpc -f"
     else
@@ -1380,11 +1803,11 @@ EOF
 }
 
 # Main script
-if [ "$EUID" -ne 0 ]; then
-    print_error "This script must be run as root"
-    print_info "Use: sudo $0 ..."
-    exit 1
-fi
+# if [ "$EUID" -ne 0 ]; then
+#     print_error "This script must be run as root"
+#     print_info "Use: sudo $0 ..."
+#     exit 1
+# fi
 # If no arguments, run interactive mode
 if [ $# -eq 0 ]; then
     interactive_mode
@@ -1675,6 +2098,121 @@ case "$MODE" in
         
     stop-client)
         stop_client
+        ;;
+        
+    restart-server)
+        restart_server
+        ;;
+        
+    restart-client)
+        restart_client
+        ;;
+        
+    show-config)
+        # Parse optional service type argument
+        SERVICE_TYPE="${2:-server}"
+        
+        if [ "$SERVICE_TYPE" != "server" ] && [ "$SERVICE_TYPE" != "client" ]; then
+            print_error "Invalid service type: $SERVICE_TYPE"
+            print_info "Usage: $0 show-config [server|client]"
+            exit 1
+        fi
+        
+        show_frp_config "$SERVICE_TYPE"
+        ;;
+        
+    auto-setup)
+        # Parse optional arguments for domain
+        DOMAIN=""
+        SERVER_IP=""
+        CLIENT_IP=""
+        
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                -m|--domain)
+                    DOMAIN="$2"
+                    shift 2
+                    ;;
+                -i|--server-ip)
+                    SERVER_IP="$2"
+                    shift 2
+                    ;;
+                -c|--client-ip)
+                    CLIENT_IP="$2"
+                    shift 2
+                    ;;
+                *)
+                    print_error "Unknown option: $1"
+                    print_info "Usage: $0 auto-setup [-m DOMAIN] [-i SERVER_IP] [-c CLIENT_IP]"
+                    exit 1
+                    ;;
+            esac
+        done
+        
+        if [ -z "$DOMAIN" ]; then
+            read -p "Enter your custom domain (e.g., example.com): " DOMAIN
+            if [ -z "$DOMAIN" ]; then
+                print_error "Domain is required"
+                exit 1
+            fi
+        fi
+        
+        # Non-interactive version
+        print_header "Auto Setup - Server + Client"
+        echo
+        
+        # Determine server address
+        REAL_SERVER_ADDR="$SERVER_IP"
+        if [ -z "$REAL_SERVER_ADDR" ]; then
+            REAL_SERVER_ADDR=$(hostname -I | awk '{print $1}' || echo "127.0.0.1")
+        fi
+        
+        # Generate random values
+        BIND_PORT=$(generate_random_port 7000 7999)
+        DASHBOARD_PORT=$(generate_random_port 7500 8499)
+        DASHBOARD_PWD=$(generate_random_string 20)
+        AUTH_TOKEN=$(generate_random_string 32)
+        DASHBOARD_USER="admin"
+        
+        print_info "Generated secure random values"
+        
+        # Setup server
+        print_header "Setting up Server"
+        setup_server "$BIND_PORT" "80" "443" "$DASHBOARD_PORT" "$DASHBOARD_USER" "$DASHBOARD_PWD" "$AUTH_TOKEN" "$SERVER_IP"
+        
+        sleep 2
+        
+        # Setup client
+        print_header "Setting up Client"
+        if [ -n "$CLIENT_IP" ]; then
+            setup_client_remote "$CLIENT_IP" "$REAL_SERVER_ADDR" "$BIND_PORT" "$DOMAIN" "80" "443" "$AUTH_TOKEN"
+        else
+            setup_client "$REAL_SERVER_ADDR" "$BIND_PORT" "$DOMAIN" "80" "443" "$AUTH_TOKEN"
+        fi
+        
+        # Save credentials
+        CRED_FILE="${HOME}/frp-auto-setup-credentials-$(date +%Y%m%d-%H%M%S).txt"
+        cat > "$CRED_FILE" << EOF
+FRP Auto Setup Credentials
+Generated: $(date)
+
+=== Server Configuration ===
+Server Address: ${REAL_SERVER_ADDR}
+Bind Port: ${BIND_PORT}
+Dashboard URL: http://${REAL_SERVER_ADDR}:${DASHBOARD_PORT}
+Dashboard User: ${DASHBOARD_USER}
+Dashboard Password: ${DASHBOARD_PWD}
+
+=== Client Configuration ===
+Server: ${REAL_SERVER_ADDR}:${BIND_PORT}
+Domain: ${DOMAIN}
+Auth Token: ${AUTH_TOKEN}
+EOF
+        chmod 600 "$CRED_FILE"
+        
+        echo
+        print_success "Auto setup complete!"
+        print_success "Credentials saved to: ${CRED_FILE}"
         ;;
         
     remove-server)
